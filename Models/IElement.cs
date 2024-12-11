@@ -1,4 +1,4 @@
-﻿namespace SokobanUltimate.Models
+﻿namespace Sokoban.Models
 {
     public interface IElement
     {

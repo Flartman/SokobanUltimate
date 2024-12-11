@@ -1,71 +1,209 @@
-﻿using System.Threading;
-using static SokobanUltimate.Game1;
+﻿
+using Sokoban.Models.Levels;
+using Sokoban.Models.Profiles;
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Windows.Forms.VisualStyles;
+using static Sokoban.Shared;
 
-namespace SokobanUltimate.Models
+namespace Sokoban.Models
 {
 
-    public class GameModel
+    public class GameModel : AppState
     {
-        public readonly Element[,] _groundMap;
-        public readonly Element[,] _collisionMap;
-        public readonly Map Map;
+        private readonly App app;
 
-        private Position _player;
-        private Level _level;
+        private readonly Stopwatch watch;
+
+        private readonly Position player;
+
+        private Map map;
+
+        private Level level;
+
+        private int boxCount;
+
+        private int boxOnEndpointCount;
+
+        private bool IsWin => boxCount == boxOnEndpointCount;
 
 
-        public GameModel(Level level)
+        public GameModel(App app)
         {
-            Map = level.Map;
-            _player = level.PlayerPosition;
+            this.app = app;
+            watch = new Stopwatch();
+            player = new Position(0, 0);
         }
 
-        public bool TryMovePlayer(int dx, int dy)
+        public override void ProcessCommand(InputCommand command)
         {
-            var newPlayerX = _player.X + dx;
-            var newPlayerY = _player.Y + dy;
-            if (IsOutOfBounds(newPlayerX, newPlayerY)) return false;
-
-            if (Map.CollisionLayer[newPlayerX, newPlayerY] is Element.Box)
+            switch (command)
             {
-                var newBoxX = newPlayerX + dx;
-                var newBoxY = newPlayerY + dy;
-                if (!IsOutOfBounds(newBoxX, newBoxY))
-                {
-                    if (Map.CollisionLayer[newBoxX, newBoxY] is Element.Empty)
+                case InputCommand.Left:
+                    TryMovePlayer(new Step(-1, 0));
+                    break;
+                case InputCommand.Right:
+                    TryMovePlayer(new Step(1, 0));
+                    break;
+                case InputCommand.Up:
+                    TryMovePlayer(new Step(0, -1));
+                    break;
+                case InputCommand.Down:
+                    TryMovePlayer(new Step(0, 1));
+                    break;
+                case InputCommand.Back:
+                    Back();
+                    break;
+                case InputCommand.Enter:
+                    if (IsWin)
                     {
-                        DoStep(dx, dy);
-                        Map.CollisionLayer[newBoxX, newBoxY] = Element.Box;
-                        return true;
+                        Back();
                     }
-                }
-                return false;
+                    break;
+                case InputCommand.Restart:
+                    Restart();
+                    break;
+                case InputCommand.Edit:
+                    EditLevel();
+                    break;
+                default:
+                    break;
             }
 
-            if (Map.CollisionLayer[newPlayerX, newPlayerY] is Element.Wall) return false;
+            if (IsWin)
+            {
+                SaveResultAndBack();
+            }
+        }
 
-            DoStep(dx, dy);
-            return true;
+        public override ViewListData GetListViewData()
+        {
+            var viewDataList = new List<string>()
+            {
+                Math.Round(watch.Elapsed.TotalSeconds, 2).ToString() + " seconds",
+            };
+            return new ViewListData(viewDataList, -1);
+        }
+
+        public override ViewMapData GetMapViewData()
+        {
+            return  (IsWin) ? null : new ViewMapData(map.GroundLayer, map.CollisionLayer);
+        }
+
+        public void Start(Level level)
+        {
+            this.level = level;
+            map = new Map(level.Width, level.Height);
+            Restart();
+        }
+
+        public override ExternalAppState GetAppState()
+        {
+            return (IsWin) ? ExternalAppState.GameResult : ExternalAppState.Game;
+        }
+
+        private void TryMovePlayer(Step step)
+        {
+            var newPlayerX = player.X + step.dX;
+            var newPlayerY = player.Y + step.dY;
+            if (IsOutOfBounds(newPlayerX, newPlayerY)) return;
+
+            if (map.CollisionLayer[newPlayerX, newPlayerY] is GameElement.Wall) return;
+
+            if (map.CollisionLayer[newPlayerX, newPlayerY] is GameElement.Box)
+            {
+                var newBoxX = newPlayerX + step.dX;
+                var newBoxY = newPlayerY + step.dY;
+                if (!IsOutOfBounds(newBoxX, newBoxY))
+                {
+                    if (map.CollisionLayer[newBoxX, newBoxY] is GameElement.Empty)
+                    {
+                        DoStep(step.dX, step.dY);
+                        map.CollisionLayer[newBoxX, newBoxY] = GameElement.Box;
+                        if (map.GroundLayer[newBoxX, newBoxY] is GameElement.EndPoint)
+                        {
+                            boxOnEndpointCount++;
+                        }
+                        if (map.GroundLayer[newPlayerX, newPlayerY] is GameElement.EndPoint)
+                        {
+                            boxOnEndpointCount--;
+                        }
+                    }
+                }
+                return;
+            }
+            DoStep(step.dX, step.dY);
         }
 
         private void DoStep(int dx, int dy)
         {
-            Map.CollisionLayer[_player.X, _player.Y] = Element.Empty;
-            _player.X = _player.X + dx;
-            _player.Y = _player.Y + dy;
-            Map.CollisionLayer[_player.X, _player.Y] = Element.Player;
+            map.CollisionLayer[player.X, player.Y] = GameElement.Empty;
+            player.X = player.X + dx;
+            player.Y = player.Y + dy;
+            map.CollisionLayer[player.X, player.Y] = GameElement.Player;
         }
 
-        public bool IsOutOfBounds(int x, int y)
+        private void Back()
+        {
+            Container.SetState(Container.InMenu);
+        }
+
+        private void SaveResultAndBack()
+        {
+            watch.Stop();
+            var result = new GameResult(level.Number, level.PackageName, watch.Elapsed.TotalSeconds);
+            app.ProfileManager.CurrentProfile.UpdateResult(result);
+        }
+
+        private void Restart()
+        {
+            player.X = level.PlayerPosition.X;
+            player.Y = level.PlayerPosition.Y;
+
+            watch.Restart();
+
+            for(var x = 0; x < map.Width; x++) 
+                for(var y = 0; y < map.Height; y++)
+                {
+                    map.GroundLayer[x, y] = level.Map.GroundLayer[x, y];
+                    map.CollisionLayer[x, y] = level.Map.CollisionLayer[x, y];
+                }
+
+            CalculateBoxesCounters();
+        }
+        
+        private void CalculateBoxesCounters()
+        {
+            boxCount = 0;
+            boxOnEndpointCount = 0;
+            for (var x = 0; x < map.Width; x++)
+                for (var y = 0; y < map.Height; y++)
+                {
+                    if(map.CollisionLayer[x, y] is GameElement.Box)
+                    {
+                        boxCount++;
+                        if (map.GroundLayer[x, y] is GameElement.EndPoint)
+                        {
+                            boxOnEndpointCount++;
+                        }
+                    }
+                }
+        }
+
+        private void EditLevel()
+        {
+            app.LevelEditor.Edit(level);   
+        }
+
+        private bool IsOutOfBounds(int x, int y)
         {
             return x < 0 
                 || y < 0 
-                || x >= Map.Width
-                || y >= Map.Height;
+                || x >= map.Width
+                || y >= map.Height;
         }
     }
-
-
 
     public record Position 
     {
